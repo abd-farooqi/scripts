@@ -123,7 +123,7 @@ Auto-completes Discord Quests (promotional tasks that reward cosmetics) without 
 
 ### Usage
 
-1. Open Discord in browser or desktop app (press `Ctrl+Shift+I` for DevTools)
+1. Open Discord desktop app (not browser! It doesn't work for browser) (press `Ctrl+Shift+I` for DevTools)
 2. Go to the **Console** tab
 3. Paste the contents of `discord.js` and press Enter
 4. The script will find all your uncompleted quests and process them sequentially
