@@ -1710,12 +1710,19 @@ _USER_AGENTS = [
 
 
 def launch_browser():
-    """Attach to a running Chrome instance via remote debugging port.
+    """Launch Chrome using the user's existing profile.
 
-    Requires Chrome to be launched with --remote-debugging-port=9222.
-    Falls back to launching a fresh Chrome if no running instance is found.
+    Strategy:
+    1. Try to attach to a running Chrome with --remote-debugging-port=9222
+    2. If that fails, launch Chrome ourselves with the user's profile directory
+       and remote debugging enabled.
+
+    The user's existing Chrome must be CLOSED for option 2, because Chrome
+    locks the profile directory (SingletonLock).
     """
     DEBUGGER_ADDRESS = "127.0.0.1:9222"
+    CHROME_USER_DATA = os.path.expanduser("~/.config/google-chrome")
+    CHROME_PROFILE = "Profile 3"  # "Abdullah Farooqi" profile
 
     # --- Try attaching to running Chrome first ---
     try:
@@ -1730,10 +1737,12 @@ def launch_browser():
 
         driver = webdriver.Chrome(options=options)
 
-        # Apply stealth patches
-        apply_stealth(driver)
+        # Open a new tab and switch to it BEFORE applying stealth/navigating
+        driver.switch_to.new_window("tab")
+        time.sleep(0.3)
 
-        # Extra navigator.webdriver patch at runtime
+        # Apply stealth patches on the new tab context
+        apply_stealth(driver)
         try:
             driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
                 "source": "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
@@ -1741,39 +1750,30 @@ def launch_browser():
         except Exception as exc:
             log.warning("Could not patch webdriver at runtime: %s", exc)
 
-        # Open MonkeyType in a new tab
-        driver.execute_script(f"window.open('{MONKEYTYPE_URL}', '_blank');")
-        # Switch to the new tab
-        driver.switch_to.window(driver.window_handles[-1])
+        # Navigate to MonkeyType in this new tab
+        driver.get(MONKEYTYPE_URL)
         print("  MonkeyType loaded (new tab in your Chrome)!")
 
-        # Verify stealth
-        try:
-            wd = driver.execute_script("return navigator.webdriver;")
-            if wd:
-                print("  WARNING: navigator.webdriver still true — stealth partial")
-            else:
-                print("  Stealth: OK (navigator.webdriver = undefined)")
-        except Exception as exc:
-            log.debug("Stealth verification failed: %s", exc)
-
+        _verify_stealth(driver)
         return driver
 
     except Exception as e:
         log.debug("Could not attach to running Chrome: %s", e)
-        print(f"  No running Chrome with debugging port found.")
-        print(f"  Tip: Close Chrome, then reopen it with Win+Ctrl+2")
-        print(f"       (your keybind now includes --remote-debugging-port=9222)")
-        print()
-        print(f"  Falling back to launching a fresh Chrome instance...")
 
-    # --- Fallback: launch fresh Chrome ---
+    # --- Launch Chrome with user's profile ---
+    print("  No running Chrome with debugging port found.")
+    print("  Launching Chrome with your profile...")
+
     chrome_binary = find_chrome_binary()
 
     options = Options()
     if chrome_binary:
         options.binary_location = chrome_binary
-        print(f"  Browser: {os.path.basename(chrome_binary)}")
+
+    # Use the user's actual Chrome profile
+    options.add_argument(f"--user-data-dir={CHROME_USER_DATA}")
+    options.add_argument(f"--profile-directory={CHROME_PROFILE}")
+    options.add_argument(f"--remote-debugging-port=9222")
 
     options.add_experimental_option("detach", True)
     options.add_experimental_option("excludeSwitches",
@@ -1790,40 +1790,32 @@ def launch_browser():
     options.add_argument("--disable-webrtc-hw-encoding")
     options.add_argument("--enforce-webrtc-ip-permission-check")
 
-    # Issue #11: realistic user-agent
-    system = platform.system()
-    if system == "Windows":
-        ua = _USER_AGENTS[0]
-    elif system == "Darwin":
-        ua = _USER_AGENTS[1]
-    else:
-        ua = _USER_AGENTS[2]
-    options.add_argument(f"--user-agent={ua}")
-
-    # Issue #11: realistic window size
-    w = random.randint(1280, 1920)
-    h = random.randint(800, 1080)
-    options.add_argument(f"--window-size={w},{h}")
-
     try:
         driver = webdriver.Chrome(options=options)
     except Exception as e:
-        print(f"\nERROR: Could not launch Chrome.\n{e}")
-        print("\nMake sure Google Chrome (or Chromium/Brave/Edge) is installed.")
-        if system == "Windows":
-            print("Download: https://www.google.com/chrome/")
-        elif system == "Darwin":
-            print("  brew install --cask google-chrome")
+        err_msg = str(e)
+        if "user data directory is already in use" in err_msg or "SingletonLock" in err_msg:
+            print(f"\n  ERROR: Your Chrome profile is locked by another Chrome instance.")
+            print(f"  Close ALL Chrome windows first, then run the bot again.")
+            print(f"  (Or run: pkill -f chrome && sleep 2)")
         else:
-            print("  sudo apt install google-chrome-stable  (Debian/Ubuntu)")
-            print("  sudo pacman -S google-chrome            (Arch)")
-            print("  sudo dnf install google-chrome-stable   (Fedora)")
+            print(f"\nERROR: Could not launch Chrome.\n{e}")
+            print("\nMake sure Google Chrome is installed.")
+            system = platform.system()
+            if system == "Windows":
+                print("Download: https://www.google.com/chrome/")
+            elif system == "Darwin":
+                print("  brew install --cask google-chrome")
+            else:
+                print("  sudo apt install google-chrome-stable  (Debian/Ubuntu)")
+                print("  sudo pacman -S google-chrome            (Arch)")
+                print("  sudo dnf install google-chrome-stable   (Fedora)")
         _sys.exit(1)
+
+    print(f"  Browser: Chrome ({CHROME_PROFILE})")
 
     # Apply stealth patches BEFORE navigating
     apply_stealth(driver)
-
-    # Extra navigator.webdriver patch at runtime
     try:
         driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
             "source": "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
@@ -1834,7 +1826,12 @@ def launch_browser():
     driver.get(MONKEYTYPE_URL)
     print("  MonkeyType loaded!")
 
-    # Verify stealth
+    _verify_stealth(driver)
+    return driver
+
+
+def _verify_stealth(driver):
+    """Check if stealth patches are working."""
     try:
         wd = driver.execute_script("return navigator.webdriver;")
         if wd:
@@ -1843,8 +1840,6 @@ def launch_browser():
             print("  Stealth: OK (navigator.webdriver = undefined)")
     except Exception as exc:
         log.debug("Stealth verification failed: %s", exc)
-
-    return driver
 
 
 def calibrate_cdp_overhead(driver, n: int = 20):
