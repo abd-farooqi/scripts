@@ -15,39 +15,62 @@ function findModule(predicate, name) {
   return mod;
 }
 
-const ApplicationStreamingStore = findModule(
+function findExport(predicate, exportPath, name) {
+  const mod = findModule(predicate, name);
+  const result = exportPath(mod);
+  if (!result) {
+    console.error(`[Quest Completer] Found ${name} module but export path returned undefined. Module exports:`, Object.keys(mod.exports || {}));
+    throw new Error(`[Quest Completer] ${name} export path is broken — Discord may have changed its internal structure.`);
+  }
+  return result;
+}
+
+const ApplicationStreamingStore = findExport(
   (x) => x?.exports?.A?.__proto__?.getStreamerActiveStreamMetadata,
+  (m) => m.exports.A,
   "ApplicationStreamingStore",
-).exports.A;
-const RunningGameStore = findModule(
+);
+const RunningGameStore = findExport(
   (x) => x?.exports?.Ay?.getRunningGames,
+  (m) => m.exports.Ay,
   "RunningGameStore",
-).exports.Ay;
-const QuestsStore = findModule(
+);
+const QuestsStore = findExport(
   (x) => x?.exports?.A?.__proto__?.getQuest,
+  (m) => m.exports.A,
   "QuestsStore",
-).exports.A;
-const ChannelStore = findModule(
+);
+const ChannelStore = findExport(
   (x) => x?.exports?.A?.__proto__?.getAllThreadsForParent,
+  (m) => m.exports.A,
   "ChannelStore",
-).exports.A;
-const GuildChannelStore = findModule(
+);
+const GuildChannelStore = findExport(
   (x) => x?.exports?.Ay?.getSFWDefaultChannel,
+  (m) => m.exports.Ay,
   "GuildChannelStore",
-).exports.Ay;
-const FluxDispatcher = findModule(
+);
+const FluxDispatcher = findExport(
   (x) => x?.exports?.h?.__proto__?.flushWaitQueue,
+  (m) => m.exports.h,
   "FluxDispatcher",
-).exports.h;
-const api = findModule((x) => x?.exports?.Bo?.get, "API").exports.Bo;
+);
+const api = findExport(
+  (x) => x?.exports?.Bo?.get,
+  (m) => m.exports.Bo,
+  "API",
+);
+
+console.log("[Quest Completer] All modules loaded successfully.");
 
 // ===========================================================================
 //  Retry wrapper — retries API calls on failure with exponential backoff
+//  Uses .call(api, ...) to preserve the correct `this` context.
 // ===========================================================================
 async function apiWithRetry(method, options, maxRetries = 3) {
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
-      return await api[method](options);
+      return await api[method].call(api, options);
     } catch (err) {
       if (attempt === maxRetries) {
         console.error(
@@ -112,6 +135,10 @@ if (quests.length === 0) {
       const taskName = supportedTasks.find((x) => taskConfig.tasks[x] != null);
       const secondsNeeded = taskConfig.tasks[taskName].target;
       let secondsDone = quest.userStatus?.progress?.[taskName]?.value ?? 0;
+
+      console.log(
+        `[Quest Completer] Processing: "${questName}" | Task: ${taskName} | ${secondsDone}/${secondsNeeded}s done`,
+      );
 
       try {
         // ===================================================================
@@ -389,8 +416,9 @@ if (quests.length === 0) {
         }
       } catch (err) {
         console.error(
-          `[Quest Completer] Error completing "${questName}":`,
-          err,
+          `[Quest Completer] ERROR completing "${questName}":`,
+          err?.message ?? err,
+          err?.stack ?? "",
         );
         // Continue to next quest instead of stopping entirely
       }
