@@ -1,4 +1,6 @@
 delete window.$;
+
+(async function () {
 let wpRequire = webpackChunkdiscord_app.push([[Symbol()], {}, (r) => r]);
 webpackChunkdiscord_app.pop();
 
@@ -426,3 +428,4 @@ async function processQuests() {
 processQuests().catch((err) => {
   console.error("[Quest Completer] Fatal error:", err?.message ?? err, err?.stack ?? "");
 });
+})();
